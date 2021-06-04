@@ -1,0 +1,23 @@
+{
+  "extends": "solhint:default",
+  "plugins": ["prettier"],
+  "rules": {
+    "avoid-throw": "warn",
+    "avoid-suicide": "error",
+    "avoid-sha3": "warn",
+    "code-complexity": ["error", 7],
+    "compiler-version": ["error", ">=0.8.0"],
+    "const-name-snakecase": "off",
+    "constructor-syntax": "error",
+    "func-visibility": ["error", { "ignoreConstructors": true }],
+    "max-line-length": ["error", 125],
+    "not-rely-on-time": "off",
+    "prettier/prettier": [
+      "error",
+      {
+        "endOfLine": "auto"
+      }
+    ],
+    "reason-string": ["warn", { "maxLength": 64 }]
+  }
+}
