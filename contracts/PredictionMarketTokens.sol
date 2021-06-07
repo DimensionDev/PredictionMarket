@@ -90,7 +90,7 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
         bytes32 marketId,
         uint256 amount
     ) external {
-        uint256 outcomeSlotCount = outcomeDetails[marketId] >> 8;
+        uint256 outcomeSlotCount = outcomeDetails[marketId] % 16;
         require(outcomeSlotCount > 0, "Market not prepared yet");
         require(amount > 0, "Amount added for liquidity needs to be non-zero");
 
@@ -123,7 +123,7 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
         bytes32 marketId,
         uint256 amount
     ) external {
-        uint256 outcomeSlotCount = outcomeDetails[marketId] >> 8;
+        uint256 outcomeSlotCount = outcomeDetails[marketId] % 16;
         require(outcomeSlotCount > 0, "Market not prepared yet");
         require(amount > 0, "Amount to withdraw liquidity needs to be non-zero");
 
