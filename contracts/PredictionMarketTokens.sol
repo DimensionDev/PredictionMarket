@@ -11,20 +11,20 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
         contractCreator = msg.sender;
     }
 
-    // outcomeDetails maps marketId to outcome details. It has 3 sections that totals to 16 bits:
-    // First 4 bits: Not used (i.e. 0000)
-    // Next 4 bits: Number of outcome slots (e.g. for 4 outcome slots, 0100)
-    // Last 8 bits: Reported outcomes (e.g. if 1st and 2nd outcomes are correct, it is 11000000). Can be retrieved by
-    //              uint8(outcomeDetails). It is only > 0 if oracle has reported outcomes, or else it remains 00000000.
-    // For the above examples, outcomeDetails = 0b0000010011000000
-    mapping(bytes32 => uint16) public outcomeDetails;
+    // outcomeDetails maps marketId to outcome details. It has 2 sections that totals to 256 bits:
+    // First 252 bits: Stores the eported outcomes, where each outcome takes 4 bits in little endian byte order. 
+    //                 From the back, the first outcome slot takes bits 5-9, second takes 10-14 and so on. 
+    //                 A successful outcome is 1000, an unsuccessful one is 0000.
+    //                 An example of this in a 2-outcome market would be `0b [insert 244 zeros here] 0000 1000 0010`.
+    // Following 4 bits: Number of outcome slots (e.g. for 4 outcome slots, 0100)
+    mapping(bytes32 => uint256) public outcomeDetails;
 
     /// @dev Emitted upon the successful preparation of a condition.
     event MarketPrepSuccess(
         bytes32 indexed conditionId,
         address indexed oracle,
         bytes32 indexed questionId,
-        uint8 outcomeSlotCount
+        uint256 outcomeSlotCount
     );
 
     /// @dev Emitted when liquidity provider successfully mints new outcome slot tokens.
@@ -48,8 +48,8 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
         bytes32 indexed marketId,
         address indexed oracle,
         bytes32 indexed questionId,
-        uint8 outcomeSlotCount,
-        uint8 reportedOutcome
+        uint256 outcomeSlotCount,
+        uint256 reportedOutcome
     );
 
     /// @dev Emitted upon a successful redemption of collateral tokens based on winning outcomes.
@@ -64,17 +64,16 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
      * @dev Prepares a condition by initializing a payout vector associated with the condition.
      * @param oracle The account assigned to report the result for the prepared condition.
      * @param questionId An identifier for the question to be answered by the oracle.
-     * @param outcomeSlotCount The number of outcome slots which should be used for this condition. Must not exceed 256.
+     * @param outcomeSlotCount The number of outcome slots which should be used for this condition. Must not exceed 15.
      */
-    function prepareMarket(address oracle, bytes32 questionId, uint8 outcomeSlotCount) external {
-        // Limit of 256 because we use a partition array that is a number of 256 bits.
-        require(outcomeSlotCount <= 8, "Too many outcome slots");
+    function prepareMarket(address oracle, bytes32 questionId, uint256 outcomeSlotCount) external {
+        require(outcomeSlotCount <= 15, "Too many outcome slots");
         require(outcomeSlotCount > 1, "There should be more than one outcome slot");
         // marketId identifies the entire market condition: oracle, questionId and number of outcome slots
         bytes32 marketId = getMarketId(oracle, questionId, outcomeSlotCount);
         require(outcomeDetails[marketId] == 0, "Market already prepared");
 
-        outcomeDetails[marketId] = (outcomeSlotCount << 8);
+        outcomeDetails[marketId] = outcomeSlotCount;
 
         emit MarketPrepSuccess(marketId, oracle, questionId, outcomeSlotCount);
     }
@@ -124,7 +123,7 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
         bytes32 marketId,
         uint256 amount
     ) external {
-        uint8 outcomeSlotCount = uint8(outcomeDetails[marketId] >> 8);
+        uint256 outcomeSlotCount = outcomeDetails[marketId] >> 8;
         require(outcomeSlotCount > 0, "Market not prepared yet");
         require(amount > 0, "Amount to withdraw liquidity needs to be non-zero");
 
@@ -150,23 +149,24 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
      * @dev For oracle to report market outcome after the market closing date.
      * @param questionId An identifier for the question to be answered by the oracle.
      * @param oracleOutcome The "correct" outcome report used to determine participant winnings.
+     * oracleOutcome paramenter should be in same format as outcomeDetails[marketId]
      */
-    function reportOutcome(bytes32 questionId, uint16 oracleOutcome) external {
-        uint8 oracleOutcomeSlotCount = uint8(oracleOutcome >> 8);
+    function reportOutcome(bytes32 questionId, uint256 oracleOutcome) external {
+        uint256 oracleOutcomeSlotCount = oracleOutcome % 16;
         require(oracleOutcomeSlotCount > 1, "There should be more than one outcome slot");
 
         // oracle is the outcome `msg.sender`
         bytes32 marketId = getMarketId(msg.sender, questionId, oracleOutcomeSlotCount);
-        uint8 marketOutcomeSlotCount = uint8(outcomeDetails[marketId] >> 8);
+        uint256 marketOutcomeSlotCount = outcomeDetails[marketId] % 16;
         require(marketOutcomeSlotCount > 1, "Market not prepared yet or is invalid");
         require(marketOutcomeSlotCount == oracleOutcomeSlotCount, "Oracle outcome slot count is incorrect");
 
-        uint8 reportedOutcome = uint8(oracleOutcome);
+        uint256 reportedOutcome = oracleOutcome >> 4;
         require(reportedOutcome > 0, "Oracle did not report any outcomes");
         // only allows oracles to successfully report outcomes once
-        require(uint8(outcomeDetails[marketId]) == 0, "Oracle has already reported");
+        require(outcomeDetails[marketId] - marketOutcomeSlotCount == 0, "Oracle has already reported");
 
-        outcomeDetails[marketId] += reportedOutcome;
+        outcomeDetails[marketId] += reportedOutcome << 4;
 
         emit OutcomeReportSucess(marketId, msg.sender, questionId, marketOutcomeSlotCount, reportedOutcome);
     }
@@ -180,18 +180,18 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
         IERC20 collateralToken,
         bytes32 marketId
     ) external {
-        uint8 marketOutcomeSlotCount = uint8(outcomeDetails[marketId] >> 8);
+        uint256 marketOutcomeSlotCount = outcomeDetails[marketId] % 16 ; // obtain last 4 bits
         require(marketOutcomeSlotCount > 1, "Market not prepared yet or is invalid");
 
-        uint8 outcome = uint8(outcomeDetails[marketId]);
+        uint256 outcome = outcomeDetails[marketId] >> 4;
         require(outcome > 0, "Outcome has not been reported yet");
         
-        uint8 numOfWinningOutcomes;
+        uint256 numOfWinningOutcomes;
         uint256 totalWinningTokensAmount;
         uint256 totalPayout;
 
-        for (uint8 i = 0; i < marketOutcomeSlotCount; i ++) {
-            if (outcome % 2 == 1) {
+        for (uint8 i = 0; i < marketOutcomeSlotCount; i++) {
+            if (outcome % 16 == 8) { // if last 4 bits are 1000 (i.e. outcome is correct)
                 uint256 outcomeSlotId = getOutcomeSlotId(collateralToken, i, marketId);
                 numOfWinningOutcomes += 1;
 
@@ -201,7 +201,7 @@ contract PredictionMarketTokens is ERC1155, PMTHelpers {
                     _burn(msg.sender, outcomeSlotId, winningTokenBalance);
                 }
             }
-            outcome >>= 1;
+            outcome >>= 4;
         }
 
         if (totalWinningTokensAmount > 0) {
