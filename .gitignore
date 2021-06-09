@@ -12,5 +12,6 @@ temporary/
 # Files
 *.env
 *.tsbuildinfo
+.DS_Store
 coverage.json
 test/predictionMarketTokens.js
